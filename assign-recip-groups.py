@@ -41,14 +41,18 @@ conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 
 cur.execute("SELECT title, id FROM bmsapp_alertrecipientgroup")
-recip_group_id_by_title = dict(cur.fetchall())
+recip_group_id_by_title = {title.strip(): id_ for title, id_ in cur.fetchall()}
 
 cur.execute("SELECT title, id FROM bmsapp_building")
-building_id_by_title = dict(cur.fetchall())
+building_id_by_title = {title.strip(): id_ for title, id_ in cur.fetchall()}
 
 with open("group-assignments.tsv", newline="") as f:
     reader = csv.reader(f, delimiter="\t")
-    rows = [row for row in reader if row and any(row)]
+    rows = [
+        [field.strip() for field in row]
+        for row in reader
+        if row and any(row)
+    ]
 
 # Validate all rows up front and abort if any Alert Recipient Group or
 # Building title cannot be found, so a partial run doesn't leave the
@@ -81,6 +85,7 @@ for row in rows:
     )
     sensor_ids = [r[0] for r in cur.fetchall()]
     if not sensor_ids:
+        print(f"{building_title}: 0 Alerts processed")
         continue
 
     # Sensor alerts (Alert Conditions) that use those sensors.
@@ -122,6 +127,8 @@ for row in rows:
                 f"WHERE alertcondition_id = ? AND alertrecipient_id IN ({member_placeholders})",
                 (alert_condition_id, *group_member_ids),
             )
+
+    print(f"{building_title}: {len(alert_condition_ids)} Alerts processed")
 
 conn.commit()
 conn.close()
