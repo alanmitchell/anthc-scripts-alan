@@ -125,7 +125,7 @@ for row in rows:
 
     for alert_condition_id in alert_condition_ids:
         sensor_title, condition, test_value = alert_info_by_id[alert_condition_id]
-        alert_desc = f"Alert on '{sensor_title}' (condition: {condition}, test_value: {test_value})"
+        alert_desc = f"{sensor_title} (condition: {condition}, test_value: {test_value})"
 
         # Alerts that have neither individual Alert Recipients nor Alert
         # Recipient Groups assigned are a special case: they show in the
