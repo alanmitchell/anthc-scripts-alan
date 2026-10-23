@@ -22,6 +22,10 @@ associated with the Building specified on a row will be assigned to the Alert Re
 Group specified on that row. In addition, the any individual Alert Recipients assignned to
 the Alert that are already part of that Alert Recipient Group will be removed.
 
+If an Alert has neither individual Alert Recipients nor Alert Recipient Groups already
+assigned to it, it is left untouched. This is a special kind of Alert that shows in the
+BMON interface but does not cause messages to be pushed to recipients.
+
 Run this script by executing the following from the command line while in this
 project directory.
 
@@ -78,6 +82,8 @@ for row in rows:
     group_id = recip_group_id_by_title[group_title]
     building_id = building_id_by_title[building_title]
 
+    print(f"\n{building_title}")
+
     # Sensors associated with this building.
     cur.execute(
         "SELECT sensor_id FROM bmsapp_bldgtosensor WHERE building_id = ?",
@@ -85,7 +91,6 @@ for row in rows:
     )
     sensor_ids = [r[0] for r in cur.fetchall()]
     if not sensor_ids:
-        print(f"{building_title}: 0 Alerts processed")
         continue
 
     # Sensor alerts (Alert Conditions) that use those sensors.
@@ -96,6 +101,20 @@ for row in rows:
     )
     alert_condition_ids = [r[0] for r in cur.fetchall()]
 
+    # Description info (Sensor Title, condition, test_value) for each Alert,
+    # used in the per-Alert status messages below.
+    placeholders = ",".join("?" * len(alert_condition_ids))
+    cur.execute(
+        "SELECT ac.id, s.title, ac.condition, ac.test_value "
+        "FROM bmsapp_alertcondition ac "
+        "JOIN bmsapp_sensor s ON s.id = ac.sensor_id "
+        f"WHERE ac.id IN ({placeholders})",
+        alert_condition_ids,
+    )
+    alert_info_by_id = {
+        row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()
+    }
+
     # Individual recipients who already belong to the Alert Recipient Group.
     cur.execute(
         "SELECT alertrecipient_id FROM bmsapp_alertrecipientgroup_recipients "
@@ -105,6 +124,27 @@ for row in rows:
     group_member_ids = [r[0] for r in cur.fetchall()]
 
     for alert_condition_id in alert_condition_ids:
+        sensor_title, condition, test_value = alert_info_by_id[alert_condition_id]
+        alert_desc = f"Alert on '{sensor_title}' (condition: {condition}, test_value: {test_value})"
+
+        # Alerts that have neither individual Alert Recipients nor Alert
+        # Recipient Groups assigned are a special case: they show in the
+        # BMON interface but do not push messages to anyone. Leave them
+        # alone rather than assigning the requested Alert Recipient Group.
+        cur.execute(
+            "SELECT 1 FROM bmsapp_alertcondition_recipients WHERE alertcondition_id = ?",
+            (alert_condition_id,),
+        )
+        has_recipients = cur.fetchone() is not None
+        cur.execute(
+            "SELECT 1 FROM bmsapp_alertcondition_recipient_groups WHERE alertcondition_id = ?",
+            (alert_condition_id,),
+        )
+        has_recipient_groups = cur.fetchone() is not None
+        if not has_recipients and not has_recipient_groups:
+            print(f"  {alert_desc}: SKIPPED (no existing recipients or recipient groups)")
+            continue
+
         # Assign the Alert Recipient Group to the alert, if not already assigned.
         cur.execute(
             "SELECT 1 FROM bmsapp_alertcondition_recipient_groups "
@@ -120,15 +160,26 @@ for row in rows:
 
         # Remove individual recipients from the alert if they are already
         # covered by the Alert Recipient Group just assigned.
+        removed_names = []
         if group_member_ids:
             member_placeholders = ",".join("?" * len(group_member_ids))
+            cur.execute(
+                "SELECT ar.name FROM bmsapp_alertcondition_recipients acr "
+                "JOIN bmsapp_alertrecipient ar ON ar.id = acr.alertrecipient_id "
+                f"WHERE acr.alertcondition_id = ? AND acr.alertrecipient_id IN ({member_placeholders})",
+                (alert_condition_id, *group_member_ids),
+            )
+            removed_names = [r[0] for r in cur.fetchall()]
             cur.execute(
                 "DELETE FROM bmsapp_alertcondition_recipients "
                 f"WHERE alertcondition_id = ? AND alertrecipient_id IN ({member_placeholders})",
                 (alert_condition_id, *group_member_ids),
             )
 
-    print(f"{building_title}: {len(alert_condition_ids)} Alerts processed")
+        msg = f"  {alert_desc}: Group '{group_title}' assigned"
+        if removed_names:
+            msg += f"; removed individual recipients: {', '.join(removed_names)}"
+        print(msg)
 
 conn.commit()
 conn.close()
